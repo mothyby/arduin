@@ -1,0 +1,126 @@
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <DHT.h>
+
+// === CONFIGURAÇÃO DE MODO (REAL ou SIMULAÇÃO) ===
+#define SIMULACAO false  // ➜ true = simula sem sensor | false = usa DHT11 real
+
+// === CONFIGURAÇÕES WI-FI ===
+const char* ssid = "usuario";
+const char* password = "senha";
+
+// === CONFIGURAÇÕES MQTT ===
+const char* mqtt_server = "IP servidor";
+const int mqtt_port = 1883;
+const char* mqtt_user = "criar no mosquitto";
+const char* mqtt_password = "criar no mosquito";
+
+// === TÓPICOS MQTT ===
+const char* mqtt_topic_temp = "casa/sala/temperatura";
+const char* mqtt_topic_umid = "casa/sala/umidade";
+const char* mqtt_topic_status = "casa/sala/status";
+
+// === SENSOR DHT11 ===
+#define DHTPIN 4       // GPIO4 (pino CP04 na sua placa)
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// === CLIENTES ===
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+long lastMsg = 0;
+char msgBuffer[50];
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH); // Desligado inicialmente
+
+  setup_wifi();
+  client.setServer(mqtt_server, mqtt_port);
+  
+  if (!SIMULACAO) {
+    dht.begin();  // Inicia o sensor DHT apenas se estiver em modo real
+  }
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  long now = millis();
+  if (now - lastMsg > 5000) { // A cada 5 segundos
+    lastMsg = now;
+
+    float temperature;
+    float humidity;
+
+    if (SIMULACAO) {
+      temperature = random(2000, 3000) / 100.0;
+      humidity = random(4000, 7000) / 100.0;
+    } else {
+      temperature = dht.readTemperature();
+      humidity = dht.readHumidity();
+
+      if (isnan(temperature) || isnan(humidity)) {
+        Serial.println("❌ Erro ao ler do DHT11");
+        return;
+      }
+    }
+
+    // Publica temperatura
+    snprintf(msgBuffer, 50, "%.2f", temperature);
+    Serial.print("🌡️ Temperatura: ");
+    Serial.println(msgBuffer);
+    client.publish(mqtt_topic_temp, msgBuffer);
+
+    // Publica umidade
+    snprintf(msgBuffer, 50, "%.2f", humidity);
+    Serial.print("💧 Umidade: ");
+    Serial.println(msgBuffer);
+    client.publish(mqtt_topic_umid, msgBuffer);
+
+    // Publica status
+    client.publish(mqtt_topic_status, "online");
+  }
+}
+
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("🔌 Conectando ao Wi-Fi: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\n✅ Wi-Fi conectado");
+  Serial.print("📡 IP local: ");
+  Serial.println(WiFi.localIP());
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("🔁 Tentando conectar ao MQTT... ");
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+
+    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
+      Serial.println("✅ Conectado ao broker!");
+      digitalWrite(LED_BUILTIN, LOW);  // LED ligado = conectado
+      client.publish(mqtt_topic_status, "FINALMENTE CONECTADO!");
+    } else {
+      Serial.print("❌ falhou, rc=");
+      Serial.print(client.state());
+      Serial.println(" tentando novamente em 5s");
+      digitalWrite(LED_BUILTIN, HIGH); // LED desligado = erro
+      delay(5000);
+    }
+  }
+}
